@@ -1,0 +1,27 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.flmr.trader'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.flmr.trader'
+        minSdk 30
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+    buildTypes {
+        debug { }
+        release { minifyEnabled false; signingConfig signingConfigs.debug }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint { abortOnError false }
+}
+
+dependencies {
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
+    implementation 'com.google.android.gms:play-services-tasks:18.2.0'
+}

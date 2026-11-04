@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FLMR AI Trader</string>
+    <string name="a11y_desc">Lets FLMR read the MT5 chart, tap buttons and place orders for you. Everything runs on this phone.</string>
+</resources>
