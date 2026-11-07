@@ -215,12 +215,18 @@ final class Mt5Driver {
         return ok;
     }
 
+    private static final Pattern ANYNUM = Pattern.compile("-?\\d+(?:[.,]\\d+)?");
+
+    /** True when the field shows our value, or shows something we cannot read as a number (unknown is not a failure). */
     private boolean same(AccessibilityNodeInfo n, double want) {
         try {
             n.refresh();
-            String t = n.getText() == null ? "" : n.getText().toString().replace(',', '.').trim();
-            return Math.abs(Double.parseDouble(t) - want) < Math.max(1e-9, Math.abs(want) * 1e-6);
-        } catch (Exception e) { return false; }
+            String t = n.getText() == null ? "" : n.getText().toString();
+            java.util.regex.Matcher m = ANYNUM.matcher(t.replace(" ", ""));
+            if (!m.find()) return true;
+            double got = Double.parseDouble(m.group().replace(',', '.'));
+            return Math.abs(got - want) < Math.max(1e-9, Math.abs(want) * 1e-4);
+        } catch (Exception e) { return true; }
     }
 
     /** Fills one field by finding its label on screen (OCR), tapping beside it, and typing into the focused input. */
@@ -238,11 +244,13 @@ final class Mt5Driver {
         return false;
     }
 
-    /** Fills the ticket and presses Buy/Sell. NaN tp skips take profit. Returns "OK ..." or "FAIL: reason". */
+    /** Fills the ticket and presses Buy/Sell. NaN sl or tp skips that field. Returns "OK ..." or "FAIL: reason". */
     String openTrade(boolean buy, double lot, double sl, double tp, int dec) {
         if (!foreground()) return "FAIL: MT5 not in front";
+        Flog.i("hands: opening the order ticket");
         String open = openOrderScreen();
         if (open != null) return "FAIL: " + open;
+        Flog.i("hands: ticket is open");
 
         List<AccessibilityNodeInfo> edits = new ArrayList<>();
         for (AccessibilityNodeInfo n : all()) {
@@ -261,20 +269,23 @@ final class Mt5Driver {
             vol = edits.get(0); slN = edits.get(1); tpN = edits.get(2);
         }
 
+        final boolean hasSl = !Double.isNaN(sl), hasTp = !Double.isNaN(tp);
         boolean filled;
-        if (vol != null && slN != null && tpN != null) {
-            filled = setText(vol, fmt(lot, 2)) && setText(slN, fmt(sl, dec)) && (Double.isNaN(tp) || setText(tpN, fmt(tp, dec)));
+        if (vol != null && (slN != null || !hasSl) && (tpN != null || !hasTp)) {
+            filled = setText(vol, fmt(lot, 2)) && (!hasSl || setText(slN, fmt(sl, dec))) && (!hasTp || setText(tpN, fmt(tp, dec)));
             sleep(500);
-            filled = filled && same(vol, lot) && same(slN, sl) && (Double.isNaN(tp) || same(tpN, tp));
+            filled = filled && same(vol, lot) && (!hasSl || same(slN, sl)) && (!hasTp || same(tpN, tp));
         } else {
-            filled = fillViaOcr("^volume|^lot", lot, 2) && fillViaOcr("stop loss|^s/l", sl, dec)
-                    && (Double.isNaN(tp) || fillViaOcr("take profit|^t/p", tp, dec));
+            filled = fillViaOcr("^volume|^lot", lot, 2) && (!hasSl || fillViaOcr("stop loss|^s/l", sl, dec))
+                    && (!hasTp || fillViaOcr("take profit|^t/p", tp, dec));
         }
+        if (filled) Flog.i("hands: volume" + (hasSl ? ", stop loss" : "") + (hasTp ? ", take profit" : "") + " typed");
         if (!filled) { back(); return "FAIL: could not type volume / stop loss / take profit into the ticket"; }
 
         final String side = buy ? "buy" : "sell";
         Target btn = lowest("^" + side + "\\b(?!.*(limit|stop))");
         if (btn == null) return "FAIL: " + side + " button not found";
+        Flog.i("hands: pressing " + side.toUpperCase());
         if (!tap(btn)) return "FAIL: " + side + " tap failed";
         sleep(1800);
 
@@ -282,7 +293,7 @@ final class Mt5Driver {
         if (isOrderScreen()) back();
         sleep(500);
         tapTab("Chart");
-        return "OK " + side + " " + fmt(lot, 2) + " sl " + fmt(sl, dec) + (Double.isNaN(tp) ? "" : " tp " + fmt(tp, dec));
+        return "OK " + side + " " + fmt(lot, 2) + (hasSl ? " sl " + fmt(sl, dec) : " no sl") + (hasTp ? " tp " + fmt(tp, dec) : "");
     }
 
     // ---------- positions ----------

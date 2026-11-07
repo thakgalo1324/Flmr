@@ -20,12 +20,28 @@ final class Bridge {
     private final MainActivity act;
     private final WebView web;
 
+    private String tok = java.util.UUID.randomUUID().toString();
+    private boolean given;
+
     Bridge(MainActivity act, WebView web) { this.act = act; this.web = web; }
+
+    /** New page load: new secret. Only the first caller (our own page script) can fetch it, so frames loaded later cannot use the bridge. */
+    synchronized void reset() { tok = java.util.UUID.randomUUID().toString(); given = false; }
+
+    @JavascriptInterface
+    public synchronized String token() {
+        if (given) return "";
+        given = true;
+        return tok;
+    }
+
+    private synchronized boolean ok(String t) { return t != null && t.equals(tok); }
 
     private KanairyService svc() { return KanairyService.instance; }
 
     @JavascriptInterface
-    public String status() {
+    public String status(String t) {
+        if (!ok(t)) return "{}";
         JSONObject o = new JSONObject();
         try {
             KanairyService s = svc();
@@ -43,10 +59,11 @@ final class Bridge {
     }
 
     @JavascriptInterface
-    public String events() { return Events.json(act); }
+    public String events(String t) { return ok(t) ? Events.json(act) : "[]"; }
 
     @JavascriptInterface
-    public void setAuto(boolean on) {
+    public void setAuto(String t, boolean on) {
+        if (!ok(t)) return;
         KanairyService s = svc();
         if (s == null) { toast("Turn on Kanairy in Accessibility first"); return; }
         s.bot().setAuto(on);
@@ -59,14 +76,15 @@ final class Bridge {
     private void applyScalp(boolean on) {
         String[][] pre = on
                 ? new String[][]{{Cfg.THR, "3"}, {Cfg.SL_ATR, "0.8"}, {Cfg.RR, "1.2"}, {Cfg.INTERVAL, "6"}, {Cfg.MAX_OPEN, "3"}, {Cfg.MAX_DAY, "40"}, {Cfg.COOLDOWN, "0.5"}, {Cfg.HOLD_MIN, "5"}}
-                : new String[][]{{Cfg.THR, "4"}, {Cfg.SL_ATR, "1.5"}, {Cfg.RR, "2"}, {Cfg.INTERVAL, "20"}, {Cfg.MAX_OPEN, "1"}, {Cfg.MAX_DAY, "6"}, {Cfg.COOLDOWN, "15"}, {Cfg.HOLD_MIN, "0"}};
+                : new String[][]{{Cfg.THR, "3"}, {Cfg.SL_ATR, "1.5"}, {Cfg.RR, "2"}, {Cfg.INTERVAL, "20"}, {Cfg.MAX_OPEN, "1"}, {Cfg.MAX_DAY, "20"}, {Cfg.COOLDOWN, "2"}, {Cfg.HOLD_MIN, "0"}};
         for (String[] kv : pre) Cfg.put(act, kv[0], kv[1]);
         Cfg.putB(act, Cfg.SCALP, on);
         toast(on ? "Scalp preset applied. Use a 1 minute chart." : "Normal preset applied");
     }
 
     @JavascriptInterface
-    public void act(String name) {
+    public void act(String t, String name) {
+        if (!ok(t)) return;
         final KanairyService s = svc();
         switch (name) {
             case "scan": if (s == null) toast("Turn on Kanairy in Accessibility first"); else s.bot().requestScan(); break;
@@ -83,6 +101,12 @@ final class Bridge {
             case "a11y": go(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); break;
             case "appinfo": go(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + act.getPackageName()))); break;
             case "battery": go(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); break;
+            case "buy": case "sell": case "close": case "stop":
+                if (s == null) { toast("Turn on Kanairy in Accessibility first"); break; }
+                s.bot().manual(name);
+                toast("Kanairy is on it. Open MT5 to watch.");
+                openMt5();
+                break;
             case "scalp_on": applyScalp(true); break;
             case "scalp_off": applyScalp(false); break;
             default: break;
@@ -95,27 +119,104 @@ final class Bridge {
         if (i == null) toast("MT5 is not installed"); else go(i);
     }
 
-    @JavascriptInterface public String getCfg(String k, String d) { return Cfg.s(act, k, d); }
-    @JavascriptInterface public void setCfg(String k, String v) { Cfg.put(act, k, v); }
-    @JavascriptInterface public boolean getFlag(String k, boolean d) { return Cfg.b(act, k, d); }
+    @JavascriptInterface public String getCfg(String t, String k, String d) { return ok(t) ? Cfg.s(act, k, d) : d; }
+    @JavascriptInterface public void setCfg(String t, String k, String v) { if (ok(t)) Cfg.put(act, k, v); }
+    @JavascriptInterface public boolean getFlag(String t, String k, boolean d) { return ok(t) ? Cfg.b(act, k, d) : d; }
 
     @JavascriptInterface
-    public void setFlag(String k, boolean v) {
+    public void setFlag(String t, String k, boolean v) {
+        if (!ok(t)) return;
         Cfg.putB(act, k, v);
         KanairyService s = svc();
         if (s != null && s.overlay() != null) s.overlay().refresh();
     }
 
-    @JavascriptInterface public String getStrategy() { return Cfg.s(act, Cfg.STRAT, ""); }
-    @JavascriptInterface public void setStrategy(String json) { Cfg.put(act, Cfg.STRAT, json == null ? "" : json); }
+    @JavascriptInterface public String getStrategy(String t) { return ok(t) ? Cfg.s(act, Cfg.STRAT, "") : ""; }
+    @JavascriptInterface public void setStrategy(String t, String json) { if (ok(t)) Cfg.put(act, Cfg.STRAT, json == null ? "" : json); }
 
     @JavascriptInterface
-    public boolean saveFile(String name, String text) {
+    public boolean saveFile(String t, String name, String text) {
+        if (!ok(t)) return false;
         return Files.saveTextAs(act, name.replaceAll("[^A-Za-z0-9._-]", "_"), text, "text/xml");
     }
 
+    // ---------- Kanairy server on your VPS ----------
+
     @JavascriptInterface
-    public void http(final int id, final String url) {
+    public void saveVps(String t, String url, String key) {
+        if (!ok(t)) return;
+        String u = url == null ? "" : url.trim();
+        while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        if (!u.isEmpty() && !u.startsWith("http://") && !u.startsWith("https://")) u = "http://" + u;
+        Cfg.put(act, "vps_url", u);
+        if (key != null && !key.trim().isEmpty()) Vault.put(act, "vpskey", key.trim());
+    }
+
+    @JavascriptInterface
+    public String vpsInfo(String t) {
+        if (!ok(t)) return "{}";
+        try {
+            return new JSONObject().put("url", Cfg.s(act, "vps_url", "")).put("hasKey", Vault.has(act, "vpskey")).toString();
+        } catch (Exception e) { return "{}"; }
+    }
+
+    /** Signed request to the Kanairy server. The key is never sent, only a one-time HMAC signature. */
+    @JavascriptInterface
+    public void vps(String t, final int id, final String method, final String path, final String body) {
+        if (!ok(t)) return;
+        new Thread(() -> {
+            int status = 0;
+            String text = "";
+            try {
+                String base = Cfg.s(act, "vps_url", "");
+                String key = Vault.get(act, "vpskey");
+                if (base.isEmpty() || key.isEmpty()) throw new IllegalStateException("not configured");
+                String b = body == null ? "" : body;
+                String ts = String.valueOf(System.currentTimeMillis());
+                byte[] nb = new byte[6];
+                new java.security.SecureRandom().nextBytes(nb);
+                StringBuilder nsb = new StringBuilder();
+                for (byte x : nb) nsb.append(String.format("%02x", x));
+                String nonce = nsb.toString();
+                javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                mac.init(new javax.crypto.spec.SecretKeySpec(key.getBytes("UTF-8"), "HmacSHA256"));
+                byte[] raw = mac.doFinal((ts + "\n" + nonce + "\n" + method + "\n" + path + "\n" + b).getBytes("UTF-8"));
+                StringBuilder sig = new StringBuilder();
+                for (byte x : raw) sig.append(String.format("%02x", x));
+                HttpURLConnection c = (HttpURLConnection) new URL(base + path).openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(10000);
+                c.setRequestMethod(method);
+                c.setRequestProperty("X-Ts", ts);
+                c.setRequestProperty("X-Nonce", nonce);
+                c.setRequestProperty("X-Sig", sig.toString());
+                c.setRequestProperty("Content-Type", "application/json");
+                if (!b.isEmpty()) {
+                    c.setDoOutput(true);
+                    c.getOutputStream().write(b.getBytes("UTF-8"));
+                }
+                status = c.getResponseCode();
+                InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
+                if (in != null) {
+                    ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n, total = 0;
+                    while ((n = in.read(buf)) > 0 && total < 2_000_000) { bo.write(buf, 0, n); total += n; }
+                    text = bo.toString("UTF-8");
+                }
+            } catch (Exception e) {
+                status = 0;
+                text = String.valueOf(e.getMessage());
+            }
+            final int st = status;
+            final String tx = text;
+            web.post(() -> web.evaluateJavascript("window.__vpsCb(" + id + "," + st + "," + JSONObject.quote(tx) + ")", null));
+        }).start();
+    }
+
+    @JavascriptInterface
+    public void http(String t, final int id, final String url) {
+        if (!ok(t)) return;
         new Thread(() -> {
             int status = 0;
             String body = "";

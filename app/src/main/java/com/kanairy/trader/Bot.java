@@ -25,6 +25,9 @@ final class Bot {
     private Thread th;
     private long lastScan, lastTradeMs, lastFg, lastFail, lastHeader, openSince;
     private volatile boolean mt5Front;
+    private volatile String pendingCmd;
+    private volatile String sProblem = "";
+    private final List<Long> opened = new ArrayList<>();
     private String lastKey = "";
     private int dayCount, zoomTries, openDir;
     private String day = "";
@@ -59,13 +62,14 @@ final class Bot {
     }
 
     void requestScan() { scanNow = true; }
+    void manual(String cmd) { pendingCmd = cmd; }
     void requestDebug() { debugNow = true; }
     void requestDump() { dumpNow = true; }
 
     void fill(JSONObject o) throws JSONException {
         o.put("auto", auto).put("action", sAction).put("info", sInfo).put("symbol", sSymbol).put("tf", sTf).put("price", sPrice)
                 .put("candles", sCandles).put("strategy", sStrategy).put("mt5", mt5Front).put("open", sOpen).put("today", dayCount)
-                .put("dry", Cfg.b(svc, Cfg.DRY, true)).put("scalp", Cfg.b(svc, Cfg.SCALP, false)).put("mode", Cfg.s(svc, Cfg.MODE, "lab"));
+                .put("problem", sProblem).put("dry", Cfg.b(svc, Cfg.DRY, true)).put("scalp", Cfg.b(svc, Cfg.SCALP, false)).put("mode", Cfg.s(svc, Cfg.MODE, "lab"));
     }
 
     void start() {
@@ -84,6 +88,8 @@ final class Bot {
             try {
                 long now = System.currentTimeMillis();
                 if (now - lastFg > 2000) { lastFg = now; mt5Front = drv.foreground(); }
+                String cmd = pendingCmd;
+                if (cmd != null) { pendingCmd = null; runManual(cmd); }
                 if (dumpNow) { dumpNow = false; doDump(); }
                 if (debugNow) { debugNow = false; doDebug(); }
                 long every = Math.max(4, Cfg.i(svc, Cfg.INTERVAL, 20)) * 1000L;
@@ -221,14 +227,23 @@ final class Bot {
         ov.setSignal(action, info);
     }
 
-    // ---------- one full cycle ----------
+    // ---------- analysis shared by auto mode and manual orders ----------
 
-    private void cycle() {
-        if (!drv.foreground()) {
-            publish("WAIT", "MT5 is not in front");
-            Flog.i("open MT5 on a chart");
-            return;
-        }
+    private static final class An {
+        Scan sc;
+        List<Candle> cs;
+        PriceScale scale;
+        Strategy.Decision built;
+        double forming;
+        int count;
+        String err;
+    }
+
+    private void problem(String m) { sProblem = m; Flog.i(m); }
+
+    private An analyse(boolean allowZoom) {
+        An a = new An();
+        if (!drv.foreground()) { a.err = "MT5 is not in front. Open MT5 on a chart."; return a; }
         Scan sc = null;
         KanairyService.Shot s = null;
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -236,12 +251,12 @@ final class Bot {
             sleep(180);
             s = svc.screenshot();
             ov.setHidden(false);
-            if (s == null) { Flog.i("no screenshot"); return; }
+            if (s == null) { a.err = "Screenshot failed. Is Kanairy still enabled in Accessibility?"; return a; }
             lastShot = s;
-            if (blank(s.px)) { publish("WAIT", "black frame"); Flog.i("black frame: MT5 may block screenshots on this screen"); return; }
+            if (blank(s.px)) { a.err = "Black frame: MT5 blocks screenshots on this screen."; return a; }
             sc = read(s);
-            if (sc.error != null) { publish("WAIT", sc.error); Flog.i(sc.error + ", press Debug image"); return; }
-            if (needsZoom(sc) && zoomTries < 8) {
+            if (sc.error != null) { a.err = "Cannot read the chart: " + sc.error + ". Press Debug image."; return a; }
+            if (allowZoom && needsZoom(sc) && zoomTries < 8) {
                 Flog.i("auto-zoom: " + sc.r.candles.size() + " candles, width " + sc.r.medianWidth + "px");
                 ov.setHidden(true);
                 zoom(sc, s);
@@ -250,25 +265,38 @@ final class Bot {
             }
             break;
         }
-        if (sc == null || sc.r == null) return;
+        if (sc == null || sc.r == null) { a.err = "Cannot read the chart."; return a; }
         if (!needsZoom(sc)) zoomTries = 0;
         readHeader(s);
-        int count = sc.r.candles.size();
-        sCandles = count;
-        if (count < 41) { publish("WAIT", "saw " + count + " candles"); Flog.i("too few candles: check colours in Settings, press Debug image"); return; }
-        if (sc.r.medianWidth < 3) { publish("WAIT", "candles too thin"); return; }
-
-        PriceScale scale = sc.o.scale;
-        List<Candle> cs = ChartReader.toPrices(sc.r.candles, scale);
-        double forming = cs.get(cs.size() - 1).c;
-        sPrice = String.format(Locale.US, "%." + Math.max(scale.decimals, 0) + "f", forming);
-
+        a.count = sc.r.candles.size();
+        sCandles = a.count;
+        if (a.count < 41) { a.err = "Saw only " + a.count + " candles. Use a candlestick chart and check candle colours in Settings."; return a; }
+        if (sc.r.medianWidth < 3) { a.err = "Candles are too thin. Zoom the chart in a little."; return a; }
+        a.sc = sc;
+        a.scale = sc.o.scale;
+        a.cs = ChartReader.toPrices(sc.r.candles, a.scale);
+        a.forming = a.cs.get(a.cs.size() - 1).c;
+        sPrice = fmt(a.forming, a.scale.decimals);
         Strategy.Params p = new Strategy.Params();
-        p.threshold = Cfg.i(svc, Cfg.THR, 4);
+        p.threshold = Cfg.i(svc, Cfg.THR, 3);
         p.slAtr = Cfg.d(svc, Cfg.SL_ATR, 1.5);
         p.rr = Cfg.d(svc, Cfg.RR, 2.0);
         p.scalp = Cfg.b(svc, Cfg.SCALP, false);
-        Strategy.Decision built = Strategy.decide(cs, p, scale.decimals);
+        a.built = Strategy.decide(a.cs, p, a.scale.decimals);
+        return a;
+    }
+
+    // ---------- one full automatic cycle ----------
+
+    private void cycle() {
+        An a = analyse(true);
+        if (a.err != null) { publish("WAIT", a.err); sProblem = a.err; Flog.i(a.err); return; }
+        sProblem = "";
+        PriceScale scale = a.scale;
+        List<Candle> cs = a.cs;
+        Strategy.Decision built = a.built;
+        double forming = a.forming;
+        int count = a.count;
 
         String mode = Cfg.s(svc, Cfg.MODE, "lab");
         String stratJson = Cfg.s(svc, Cfg.STRAT, "");
@@ -305,30 +333,104 @@ final class Bot {
                 if (!Double.isNaN(atr) && !Double.isNaN(tpA)) tp = buy ? entry + atr * tpA : entry - atr * tpA;
                 double lots = lr.optDouble("lots", 0);
                 if (lots > 0) lot = lots;
-                key = action + ":" + String.format(Locale.US, "%." + Math.max(scale.decimals, 0) + "f", cs.get(cs.size() - 2).c);
+                key = action + ":" + fmt(cs.get(cs.size() - 2).c, scale.decimals);
             }
             info = sStrategy + ": " + (el ? "long rule met" : es ? "short rule met" : "no entry") + (el && es ? " (conflict)" : "")
                     + "\nbuilt-in score " + built.score + (mode.equals("both") ? " (must agree)" : "");
         }
         if (!action.equals("WAIT") && !Double.isNaN(sl))
-            info += String.format(Locale.US, "\nSL %." + scale.decimals + "f" + (Double.isNaN(tp) ? "" : "  TP %." + scale.decimals + "f"), sl, tp);
+            info += "\nSL " + fmt(sl, scale.decimals) + (Double.isNaN(tp) ? "" : "  TP " + fmt(tp, scale.decimals));
         publish(action, info);
-        Flog.i(action + " (" + count + " candles, " + sc.o.variant + " axis)");
+        Flog.i(action + " (" + count + " candles, " + a.sc.o.variant + " axis)");
 
         if (!auto) return;
         boolean live = !Cfg.b(svc, Cfg.DRY, true);
         if (live) timeStop();
         if (live && ((exitLong && openDir == 1) || (exitShort && openDir == -1))) {
-            ov.setHidden(true);
-            String res = drv.closeAll();
-            ov.setHidden(false);
-            Flog.i("exit rule: " + res);
-            Events.add(svc, "EXIT", "Exit rule closed trades");
-            openDir = 0; openSince = 0;
+            Flog.i("exit rule met");
+            closeNow("Exit rule");
             return;
         }
         if (action.equals("WAIT")) return;
         trade(action, key, lot, sl, tp, scale.decimals);
+    }
+
+    // ---------- manual hands ----------
+
+    private void runManual(String cmd) {
+        try {
+            if (cmd.equals("close")) { closeNow("Manual close"); return; }
+            if (cmd.equals("stop")) { setAuto(false); closeNow("Stop everything"); return; }
+            boolean buy = cmd.equals("buy");
+            Flog.i("hands: manual " + cmd.toUpperCase());
+            if (!drv.foreground()) { problem("MT5 is not in front. Open MT5 first."); return; }
+            An a = analyse(false);
+            double lot = Cfg.d(svc, Cfg.LOT, 0.01), sl = Double.NaN, tp = Double.NaN;
+            int dec = 5;
+            if (a.err == null) {
+                dec = a.scale.decimals;
+                double atr = a.built.atr;
+                if (atr > 0) {
+                    double dist = Cfg.d(svc, Cfg.SL_ATR, 1.5) * atr, rr = Cfg.d(svc, Cfg.RR, 2.0);
+                    sl = buy ? a.forming - dist : a.forming + dist;
+                    tp = buy ? a.forming + rr * dist : a.forming - rr * dist;
+                }
+            } else {
+                Flog.i("chart not readable, sending the order without SL and TP");
+            }
+            execute(buy, lot, sl, tp, dec, "Manual");
+        } catch (Throwable t) {
+            problem("Manual command failed: " + t.getClass().getSimpleName());
+        }
+    }
+
+    /** Runs the order through MT5 and records the outcome. */
+    private boolean execute(boolean buy, double lot, double sl, double tp, int dec, String why) {
+        String action = buy ? "BUY" : "SELL";
+        ov.setHidden(true);
+        String res = drv.openTrade(buy, lot, sl, tp, dec);
+        if (res.startsWith("FAIL")) failDiagnostics(res);
+        ov.setHidden(false);
+        Flog.i(res);
+        boolean ok = res.startsWith("OK");
+        Events.add(svc, ok ? action : "ERROR", why + ": " + res);
+        if (ok) {
+            sProblem = "";
+            opened.add(System.currentTimeMillis());
+            lastTradeMs = System.currentTimeMillis();
+            openDir = buy ? 1 : -1;
+            if (openSince == 0) openSince = System.currentTimeMillis();
+            String today = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+            if (!today.equals(day)) { day = today; dayCount = 0; }
+            dayCount++;
+        } else {
+            sProblem = res;
+        }
+        return ok;
+    }
+
+    private void closeNow(String why) {
+        ov.setHidden(true);
+        String res = drv.closeAll();
+        ov.setHidden(false);
+        Flog.i(why + ": " + res);
+        Events.add(svc, "EXIT", why + ": " + res);
+        opened.clear();
+        openDir = 0; openSince = 0; sOpen = 0;
+    }
+
+    private int openCount() {
+        long keep = (long) (Cfg.d(svc, Cfg.HOLD_MIN, 0) > 0 ? Cfg.d(svc, Cfg.HOLD_MIN, 0) * 60000L : 3600000L);
+        long now = System.currentTimeMillis();
+        for (int i = opened.size() - 1; i >= 0; i--) if (now - opened.get(i) > keep) opened.remove(i);
+        if (Cfg.b(svc, Cfg.POS_CHECK, true)) {
+            ov.setHidden(true);
+            int n = drv.readOpenCount();
+            ov.setHidden(false);
+            if (n >= 0) return n;
+            Flog.i("cannot read MT5 positions, using Kanairy's own count");
+        }
+        return opened.size();
     }
 
     private JSONObject runLab(List<Candle> cs, String stratJson) {
@@ -345,17 +447,12 @@ final class Bot {
         try { return new JSONObject(res); } catch (JSONException e) { return null; }
     }
 
-    // ---------- execution ----------
+    // ---------- automatic execution ----------
 
     private void timeStop() {
         double hold = Cfg.d(svc, Cfg.HOLD_MIN, 0);
         if (hold <= 0 || openSince == 0 || System.currentTimeMillis() - openSince < hold * 60000L) return;
-        ov.setHidden(true);
-        String res = drv.closeAll();
-        ov.setHidden(false);
-        Flog.i("time stop: " + res);
-        Events.add(svc, "EXIT", "Time stop: " + res);
-        openSince = 0; openDir = 0;
+        closeNow("Time stop");
     }
 
     private static String fmt(double v, int dec) { return String.format(Locale.US, "%." + Math.max(dec, 0) + "f", v); }
@@ -376,40 +473,21 @@ final class Bot {
 
         String today = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
         if (!today.equals(day)) { day = today; dayCount = 0; }
-        if (dayCount >= Cfg.i(svc, Cfg.MAX_DAY, 6)) { Flog.i("daily trade cap reached"); return; }
+        if (dayCount >= Cfg.i(svc, Cfg.MAX_DAY, 20)) { Flog.i("daily trade cap reached"); return; }
 
-        int open = 0;
-        if (Cfg.b(svc, Cfg.POS_CHECK, true)) {
-            ov.setHidden(true);
-            open = drv.readOpenCount();
-            ov.setHidden(false);
-            if (open < 0) { Flog.i("cannot read positions, skipping trade (turn off the position check in Settings to skip this)"); return; }
-        }
+        int open = openCount();
         sOpen = open;
         if (open == 0) { openDir = 0; openSince = 0; }
 
         if (open > 0 && openDir == -dir) {
-            ov.setHidden(true);
-            String res = drv.closeAll();
-            ov.setHidden(false);
-            Flog.i("reversal: " + res);
-            Events.add(svc, "EXIT", "Reversal: " + res);
-            openDir = 0; openSince = 0; lastKey = key; lastTradeMs = System.currentTimeMillis();
+            closeNow("Reversal");
+            lastKey = key; lastTradeMs = System.currentTimeMillis();
             return;
         }
         if (open >= Cfg.i(svc, Cfg.MAX_OPEN, 1)) { Flog.i("max open trades reached"); return; }
-        if (System.currentTimeMillis() - lastTradeMs < (long) (Cfg.d(svc, Cfg.COOLDOWN, 15) * 60000L)) { Flog.i("cooldown"); return; }
+        if (System.currentTimeMillis() - lastTradeMs < (long) (Cfg.d(svc, Cfg.COOLDOWN, 2) * 60000L)) { Flog.i("cooldown"); return; }
 
-        ov.setHidden(true);
-        String res = drv.openTrade(buy, lot, sl, tp, dec);
-        if (res.startsWith("FAIL")) failDiagnostics(res);
-        ov.setHidden(false);
-        Flog.i(res);
-        Events.add(svc, res.startsWith("OK") ? action : "ERROR", res);
         lastKey = key;
-        if (res.startsWith("OK")) {
-            dayCount++; lastTradeMs = System.currentTimeMillis(); openDir = dir; sOpen = open + 1;
-            if (openSince == 0) openSince = System.currentTimeMillis();
-        }
+        if (execute(buy, lot, sl, tp, dec, "Auto")) sOpen = open + 1;
     }
 }

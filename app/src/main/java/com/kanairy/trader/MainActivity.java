@@ -26,7 +26,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(0xFF0B0F14);
+        root.setBackgroundColor(0xFF000000);
         root.setOnApplyWindowInsetsListener((v, ins) -> {
             Insets i = ins.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
             v.setPadding(i.left, i.top, i.right, i.bottom);
@@ -42,13 +42,18 @@ public class MainActivity extends Activity {
         ws.setAllowFileAccess(false);
         ws.setSupportZoom(false);
         ws.setTextZoom(100);
-        web.addJavascriptInterface(new Bridge(this, web), "Android");
+        final Bridge bridge = new Bridge(this, web);
+        web.addJavascriptInterface(bridge, "Android");
 
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 return loader.shouldInterceptRequest(r.getUrl());
+            }
+
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                bridge.reset();
             }
 
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {

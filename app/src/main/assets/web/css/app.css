@@ -341,3 +341,17 @@ body.drawer-open #drawer { transform: none; } body.drawer-open #drawerScrim { op
 #bottomNav { border-radius: 28px; }
 #drawer .drawer-item { border-radius: 14px; }
 .brand { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* settings rows may wrap instead of truncating */
+.setting .t { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.setting { gap: 14px; }
+.card.problem { border-color: var(--down); background: linear-gradient(180deg, var(--down-bg), transparent); }
+.card.problem b { color: var(--down); }
+.live-card .row { align-items: flex-start; } .live-card .status { margin-top: 7px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.two .btn { width: 100%; justify-content: center; }
+#view-assistant { padding: 0; overflow: hidden; } #view-assistant iframe { width: 100%; height: 100%; border: 0; display: block; }
+.setting.col { flex-direction: column; align-items: stretch; gap: 10px; }
+.seg.wide { display: flex; width: 100%; } .seg.wide button { flex: 1; min-width: 0; padding-left: 6px; padding-right: 6px; }
+.card.problem + div { height: 0 !important; }
+.pill.kind { min-width: 66px; text-align: center; flex: none; justify-content: center; display: inline-flex; }

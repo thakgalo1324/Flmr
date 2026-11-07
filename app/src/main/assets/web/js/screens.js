@@ -169,15 +169,15 @@ export function mountDeveloper() {
 }
 
 export function mountAssistant() {
-  hooks.onAssistant = () => page('assistant', h('div', { class: 'h1' }, 'AI assistant'), h('p', { class: 'lead' }, 'Ask the Kanairy assistant about strategies, XML rules and risk. It opens in your browser.'),
-    h('div', { class: 'card stack' }, h('a', { class: 'btn primary', href: 'https://helpful-taiyaki-620c2c.netlify.app/', target: '_blank', rel: 'noopener noreferrer' }, 'Open the assistant')));
+  const v = document.getElementById('view-assistant');
+  hooks.onAssistant = () => { if (!v.firstChild) v.append(h('iframe', { src: 'https://helpful-taiyaki-620c2c.netlify.app/', title: 'Kanairy AI assistant', allow: 'clipboard-write', referrerpolicy: 'no-referrer' })); };
 }
 
 // ---------------- settings ----------------
 const TRADING_FIELDS = [
-  ['Fallback lot size (when the strategy has none)', 'lot', '0.01'], ['Max open trades', 'max_open', '1'], ['Max trades per day', 'max_day', '6'],
-  ['Cooldown between trades (min)', 'cooldown', '15'], ['Scan every (seconds)', 'interval', '20'], ['Close everything after (min, 0 = off)', 'hold_min', '0'],
-  ['Built-in engine: signal threshold', 'thr', '4'], ['Built-in engine: stop loss (×ATR)', 'sl_atr', '1.5'], ['Built-in engine: take profit (risk:reward)', 'rr', '2'],
+  ['Fallback lot size (when the strategy has none)', 'lot', '0.01'], ['Max open trades', 'max_open', '1'], ['Max trades per day', 'max_day', '20'],
+  ['Cooldown between trades (min)', 'cooldown', '2'], ['Scan every (seconds)', 'interval', '20'], ['Close everything after (min, 0 = off)', 'hold_min', '0'],
+  ['Built-in engine: signal threshold', 'thr', '3'], ['Built-in engine: stop loss (×ATR)', 'sl_atr', '1.5'], ['Built-in engine: take profit (risk:reward)', 'rr', '2'],
 ];
 export function mountSettings() {
   const render = () => {

@@ -45,12 +45,38 @@ final class Overlay {
         TextView v = new TextView(svc);
         v.setText(t);
         v.setTextColor(Color.WHITE);
-        v.setTextSize(11);
+        v.setTextSize(10.5f);
         v.setTypeface(Typeface.DEFAULT_BOLD);
         v.setGravity(Gravity.CENTER);
-        v.setPadding(px(10), px(7), px(10), px(7));
+        v.setPadding(px(6), px(8), px(6), px(8));
         v.setBackground(bg(color, 8));
         return v;
+    }
+
+    private LinearLayout rowOf() {
+        LinearLayout r = new LinearLayout(svc);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setPadding(0, px(5), 0, 0);
+        return r;
+    }
+
+    private void addChip(LinearLayout row, TextView c, boolean first) {
+        LinearLayout.LayoutParams m = new LinearLayout.LayoutParams(0, -2, 1f);
+        if (!first) m.leftMargin = px(5);
+        c.setSingleLine(true);
+        c.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(c, m);
+    }
+
+    /** Dangerous chips need two taps: the first arms it for 3 seconds. */
+    private void confirmChip(TextView chip, String label, Runnable go) {
+        final boolean[] armed = new boolean[1];
+        chip.setOnClickListener(v -> {
+            if (armed[0]) { armed[0] = false; chip.setText(label); go.run(); return; }
+            armed[0] = true;
+            chip.setText("TAP AGAIN");
+            svc.mainHandler().postDelayed(() -> { armed[0] = false; chip.setText(label); }, 3000);
+        });
     }
 
     private void build() {
@@ -59,7 +85,7 @@ final class Overlay {
         panel = new LinearLayout(svc);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(px(10), px(8), px(10), px(10));
-        panel.setBackground(bg(0xEE10161D, 14));
+        panel.setBackground(bg(0xF010161D, 16));
 
         LinearLayout head = new LinearLayout(svc);
         head.setOrientation(LinearLayout.HORIZONTAL);
@@ -74,8 +100,8 @@ final class Overlay {
         tvMode.setTypeface(Typeface.DEFAULT_BOLD);
         tvMode.setPadding(px(8), 0, 0, 0);
         View sp = new View(svc);
-        TextView min = chip("–", 0xFF2A3441);
-        TextView close = chip("✕", 0xFF2A3441);
+        TextView min = chip("-", 0xFF2A3441);
+        TextView close = chip("X", 0xFF2A3441);
         head.addView(title);
         head.addView(tvMode);
         head.addView(sp, new LinearLayout.LayoutParams(0, 1, 1f));
@@ -88,48 +114,61 @@ final class Overlay {
         tvSignal = new TextView(svc);
         tvSignal.setText("WAIT");
         tvSignal.setTextColor(0xFFB0B8C4);
-        tvSignal.setTextSize(26);
+        tvSignal.setTextSize(24);
+        tvSignal.setSingleLine(true);
         tvSignal.setTypeface(Typeface.DEFAULT_BOLD);
         panel.addView(tvSignal);
 
         tvInfo = new TextView(svc);
         tvInfo.setTextColor(0xFFB0B8C4);
         tvInfo.setTextSize(10.5f);
+        tvInfo.setMaxLines(3);
+        tvInfo.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tvInfo.setText("idle");
         panel.addView(tvInfo);
 
-        LinearLayout row = new LinearLayout(svc);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, px(8), 0, px(6));
         btnAuto = chip("AUTO OFF", 0xFF3A4352);
         TextView scan = chip("SCAN", 0xFF1F6FEB);
+        TextView buy = chip("BUY", 0xFF16A34A);
+        TextView sell = chip("SELL", 0xFFDC2626);
+        TextView closeAll = chip("CLOSE ALL", 0xFF7C2D12);
         TextView dbg = chip("DEBUG", 0xFF2A3441);
         TextView dump = chip("DUMP", 0xFF2A3441);
         TextView teach = chip("TEACH", 0xFF2A3441);
-        row.addView(btnAuto);
-        LinearLayout.LayoutParams m = new LinearLayout.LayoutParams(-2, -2);
-        m.leftMargin = px(5);
-        row.addView(scan, m);
-        row.addView(dbg, m);
-        row.addView(dump, m);
-        row.addView(teach, m);
-        panel.addView(row);
+
+        LinearLayout r1 = rowOf();
+        addChip(r1, btnAuto, true);
+        addChip(r1, scan, false);
+        panel.addView(r1);
+        LinearLayout r2 = rowOf();
+        addChip(r2, buy, true);
+        addChip(r2, sell, false);
+        addChip(r2, closeAll, false);
+        panel.addView(r2);
+        LinearLayout r3 = rowOf();
+        addChip(r3, dbg, true);
+        addChip(r3, dump, false);
+        addChip(r3, teach, false);
+        panel.addView(r3);
 
         tvLog = new TextView(svc);
         tvLog.setTextColor(0xFF7D8796);
         tvLog.setTextSize(10);
+        tvLog.setMaxLines(4);
+        tvLog.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tvLog.setPadding(0, px(6), 0, 0);
         panel.addView(tvLog);
 
         bubble = new TextView(svc);
-        bubble.setText("F");
+        bubble.setText("K");
         bubble.setTextColor(Color.WHITE);
         bubble.setTextSize(18);
         bubble.setTypeface(Typeface.DEFAULT_BOLD);
         bubble.setGravity(Gravity.CENTER);
-        bubble.setBackground(bg(0xEE16C784, 28));
+        bubble.setBackground(bg(0xF016C784, 28));
         bubble.setVisibility(View.GONE);
 
-        root.addView(panel, new FrameLayout.LayoutParams(px(300), -2));
+        root.addView(panel, new FrameLayout.LayoutParams(px(270), -2));
         root.addView(bubble, new FrameLayout.LayoutParams(px(48), px(48)));
 
         btnAuto.setOnClickListener(v -> bot.setAuto(!bot.isAuto()));
@@ -137,6 +176,9 @@ final class Overlay {
         dbg.setOnClickListener(v -> bot.requestDebug());
         dump.setOnClickListener(v -> bot.requestDump());
         teach.setOnClickListener(v -> startTeach());
+        confirmChip(buy, "BUY", () -> bot.manual("buy"));
+        confirmChip(sell, "SELL", () -> bot.manual("sell"));
+        confirmChip(closeAll, "CLOSE ALL", () -> bot.manual("close"));
         close.setOnClickListener(v -> { bot.setAuto(false); remove(); });
         min.setOnClickListener(v -> collapse(true));
 
@@ -169,7 +211,12 @@ final class Overlay {
                 case MotionEvent.ACTION_MOVE:
                     float dx = e.getRawX() - d[0], dy = e.getRawY() - d[1];
                     if (Math.abs(dx) + Math.abs(dy) > 12) moved[0] = true;
-                    if (moved[0]) { lp.x = (int) (d[2] + dx); lp.y = (int) (d[3] + dy); update(); }
+                    if (moved[0]) {
+                        android.graphics.Rect scr = svc.screen();
+                        lp.x = Math.max(0, Math.min((int) (d[2] + dx), scr.width() - px(60)));
+                        lp.y = Math.max(0, Math.min((int) (d[3] + dy), scr.height() - px(80)));
+                        update();
+                    }
                     return true;
                 case MotionEvent.ACTION_UP:
                     if (!moved[0]) view.performClick();
