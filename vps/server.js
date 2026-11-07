@@ -170,6 +170,7 @@ function writeStartFiles() {
 }
 
 function launchMt5() {
+  autoSetup();
   if (!S.login || !S.server || !S.hasPw) return { ok: false, error: 'Save your broker login first.' };
   if (!cfg.mt5Path || !fs.existsSync(cfg.mt5Path)) return { ok: false, error: 'MT5 not found. Set mt5Path in config.json on the VPS.' };
   writeStartFiles();
@@ -183,6 +184,73 @@ function launchMt5() {
   else start();
   addFeed('sys', 'MT5 restarting with your login');
   return { ok: true };
+}
+
+// ---------- one-click setup: find MT5, install and compile the EA, show the phone address ----------
+const saveCfg = () => fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2));
+function findMt5() {
+  if (cfg.mt5Path && fs.existsSync(cfg.mt5Path)) return cfg.mt5Path;
+  const roots = new Set([process.env.ProgramFiles, process.env['ProgramFiles(x86)'], 'C:\\Program Files', 'C:\\Program Files (x86)'].filter(Boolean));
+  for (const r of roots) {
+    let dirs = [];
+    try { dirs = fs.readdirSync(r); } catch { continue; }
+    for (const d of dirs) {
+      if (!/meta\s*trader|mt5/i.test(d)) continue;
+      const exe = path.join(r, d, 'terminal64.exe');
+      if (fs.existsSync(exe)) return exe;
+    }
+  }
+  return '';
+}
+function findDataDir(exe) {
+  const base = path.join(process.env.APPDATA || '', 'MetaQuotes', 'Terminal');
+  const want = path.dirname(exe).toLowerCase();
+  let fallback = '';
+  let dirs = [];
+  try { dirs = fs.readdirSync(base); } catch { return ''; }
+  for (const d of dirs) {
+    const dir = path.join(base, d);
+    if (!fs.existsSync(path.join(dir, 'MQL5'))) continue;
+    try {
+      const o = fs.readFileSync(path.join(dir, 'origin.txt'));
+      const txt = (o[0] === 0xFF ? o.toString('utf16le') : o.toString('utf8')).replace(/^\uFEFF/, '').trim().toLowerCase();
+      if (txt === want) return dir;
+    } catch { /* no origin file */ }
+    fallback = fallback || dir;
+  }
+  return fallback;
+}
+function autoSetup() {
+  try {
+    const exe = findMt5();
+    if (!exe) { log('MT5 not found. Install MetaTrader 5, open it once, then restart this server.'); return; }
+    let changed = false;
+    if (cfg.mt5Path !== exe) { cfg.mt5Path = exe; changed = true; }
+    if (!cfg.mt5DataDir || !fs.existsSync(cfg.mt5DataDir)) { cfg.mt5DataDir = findDataDir(exe); changed = !!cfg.mt5DataDir || changed; }
+    if (changed) saveCfg();
+    if (!cfg.mt5DataDir) { log('MT5 data folder not found. Open MT5 once, close it, then restart this server.'); return; }
+    log('MT5 found:', exe);
+    const src = path.join(DIR, '..', 'mt5', 'KanairyEA.mq5');
+    if (!fs.existsSync(src)) { log('KanairyEA.mq5 not found next to the vps folder. Keep the mt5 folder beside vps.'); return; }
+    const dstDir = path.join(cfg.mt5DataDir, 'MQL5', 'Experts');
+    fs.mkdirSync(dstDir, { recursive: true });
+    const dst = path.join(dstDir, 'KanairyEA.mq5'), ex5 = path.join(dstDir, 'KanairyEA.ex5');
+    const need = !fs.existsSync(dst) || fs.readFileSync(src, 'utf8') !== fs.readFileSync(dst, 'utf8');
+    if (need) fs.copyFileSync(src, dst);
+    if (need || !fs.existsSync(ex5)) {
+      const me = path.join(path.dirname(exe), 'MetaEditor64.exe');
+      if (!fs.existsSync(me)) { log('MetaEditor not found. Open MT5, press F4, open KanairyEA and press F7 to compile it.'); return; }
+      execFile(me, ['/compile:' + dst, '/log:' + path.join(DATA, 'compile.log')], () => log(fs.existsSync(ex5) ? 'EA installed and compiled.' : 'EA compile failed. See data\\compile.log'));
+    } else log('EA already installed.');
+  } catch (e) { log('Auto setup problem:', e.message); }
+}
+async function showAddress() {
+  let ip = '';
+  try { ip = (await (await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(4000) })).text()).trim(); } catch { /* offline */ }
+  console.log('\n  Kanairy server is running.');
+  console.log(`  Phone address:  http://${ip || '<your VPS public IP>'}:${cfg.appPort}`);
+  console.log(`  App key:        ${cfg.appKey}`);
+  console.log(`\n  Also open TCP port ${cfg.appPort} in your VPS provider's firewall (security group).\n`);
 }
 
 const send = (res, code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
@@ -247,7 +315,5 @@ const eaServer = http.createServer(async (req, res) => {
 
 appServer.listen(cfg.appPort, '0.0.0.0', () => log(`App API on port ${cfg.appPort}`));
 eaServer.listen(cfg.eaPort, '127.0.0.1', () => log(`EA bridge on 127.0.0.1:${cfg.eaPort}`));
-console.log('\n  Kanairy server is running.');
-console.log(`  App address:  http://<your VPS public IP>:${cfg.appPort}`);
-console.log(`  App key:      ${cfg.appKey}`);
-console.log(`  EA token:     ${cfg.eaToken}   (only needed if you attach the EA by hand)\n`);
+autoSetup();
+showAddress();

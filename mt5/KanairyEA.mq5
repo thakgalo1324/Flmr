@@ -10,7 +10,7 @@
 #property description "Kanairy bridge EA. Needs the Kanairy server running."
 #include <Trade/Trade.mqh>
 
-input string InpToken     = "";      // Token (copy from Kanairy > Settings)
+input string InpToken     = "";      // Token printed by the Kanairy server (Launch MT5 fills it in)
 input int    InpPort      = 8765;    // Bridge port
 input int    InpBars      = 300;     // Closed candles sent to the strategy
 input long   InpMagic     = 550002;  // Magic number
