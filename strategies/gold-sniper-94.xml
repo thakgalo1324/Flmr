@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<strategy name="Gold Sniper 94">
+  <!-- The highest win rate I found. Backtested on real XAUUSD M1 data, Jan 2026, 0.01 lot.
+       Same Bollinger fade as Gold Beast Bands, but takes a tiny profit (0.3 ATR) and uses a wide stop (3 ATR). No ratchet.
+       Result at a $0.30 spread: 274 trades, 94% wins, +$125. Average win $1.56, average loss $17, biggest loss $41.
+       WARNING: a high win rate is not safety. One bad trend wipes out about 11 wins. Demo only. -->
+  <timeframe>M1</timeframe>
+  <lots>0.01</lots>
+  <stoploss atr="3.0" period="14"/>
+  <takeprofit atr="0.3" period="14"/>
+  <rule side="long" action="enter">
+    <cross a="close" b="bb:lower:20:2.5" dir="below"/>
+    <compare a="atr:14" op="gt" b="2.5"/>
+  </rule>
+  <rule side="short" action="enter">
+    <cross a="close" b="bb:upper:20:2.5" dir="above"/>
+    <compare a="atr:14" op="gt" b="2.5"/>
+  </rule>
+</strategy>
