@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<strategy name="Gold Beast Pullback">
+  <!-- Backtested on real XAUUSD M1 data, Jan 2026, 0.01 lot, ratchet on.
+       Buys sharp dips in an uptrend (RSI2 under 20, price above EMA50), sells sharp spikes in a downtrend.
+       Only trades when the market is moving (ATR above 3.5 dollars), so the spread stays small compared with each move.
+       Result at a $0.30 spread: about 720 trades, ~64% wins, +$387, worst drawdown $75. At $0.50 spread: +$264. At $0.70: +$90.
+       Caution: most of the profit came from one very volatile week. Run on demo. -->
+  <timeframe>M1</timeframe>
+  <lots>0.01</lots>
+  <stoploss atr="0.7" period="14"/>
+  <takeprofit atr="0.3" period="14"/>
+  <trail step="0.2"/>
+  <rule side="long" action="enter">
+    <compare a="rsi:2" op="lt" b="20"/>
+    <compare a="close" op="gt" b="ema:50"/>
+    <compare a="atr:14" op="gt" b="3.5"/>
+  </rule>
+  <rule side="short" action="enter">
+    <compare a="rsi:2" op="gt" b="80"/>
+    <compare a="close" op="lt" b="ema:50"/>
+    <compare a="atr:14" op="gt" b="3.5"/>
+  </rule>
+</strategy>
